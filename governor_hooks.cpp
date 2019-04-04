@@ -1,12 +1,9 @@
-
 #include <dlfcn.h>
 #include <pthread.h>
 
 #include <cassert>
 
-#include <atomic>
-
-#include "governor.h"
+#include "governor_impl.h"
 
 // handle process init/exit hooks
 // global variables
