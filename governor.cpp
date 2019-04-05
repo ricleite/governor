@@ -15,6 +15,12 @@ void governor_subscribe(size_t threadId)
 }
 
 extern "C"
+void governor_unsubscribe()
+{
+    sGovernor->Unsubscribe();
+}
+
+extern "C"
 void governor_control()
 {
     sGovernor->ControlPoint();
