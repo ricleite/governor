@@ -5,7 +5,7 @@ CXXFLAGS=-std=gnu++14 -Wall $(DFLAGS)
 LDFLAGS=-ldl -pthread -latomic
 
 OBJS=governor.o governor_impl.o governor_hooks.o
-HEADERS=governor.h governor_impl.h
+HEADERS=governor.h governor_impl.h governor_hooks.h
 DEFS=-DGOVERNOR=1
 
 default: libgovernor.a

@@ -1,5 +1,3 @@
-#include <unistd.h>
-
 #include <cstdio>
 #include <cstdlib>
 #include <cassert>
@@ -7,7 +5,10 @@
 #include <vector>
 #include <algorithm>
 
+#include <unistd.h>
+
 #include "governor.h"
+#include "governor_hooks.h"
 #include "governor_impl.h"
 
 #define GOV_ERR(str, ...) \
@@ -208,6 +209,10 @@ void Governor::Subscribe(size_t threadId)
 
     assert(GetThreadState() == state);
     assert(_threads.size() == _threadIds.size());
+
+    // call thread hook
+    // ensures that thread calls Unsubscribe on thread exit
+    sub_hook();
 }
 
 void Governor::Unsubscribe()
@@ -216,7 +221,7 @@ void Governor::Unsubscribe()
 
     if (GetThreadState() == nullptr)
     {
-        GOV_ERR("thread is not subbed, cannot unsub");
+        // GOV_ERR("thread is not subbed, cannot unsub");
         return;
     }
 
@@ -260,24 +265,6 @@ void Governor::ControlPoint()
 
     while (_activeThreadId.load() != id)
         std::this_thread::yield();
-}
-
-void Governor::HandleThreadInit() { }
-
-void Governor::HandleThreadFinalize()
-{
-    bool isSubbed = false;
-
-    // check if thread is subscribed
-    // hold a lock just to check, since Unsubscribe() will acquire it again
-    {
-        std::lock_guard<std::mutex> lock(_mutex);
-
-        isSubbed = (GetThreadState() != nullptr);
-    }
-
-    if (isSubbed)
-        Unsubscribe();
 }
 
 ThreadState* Governor::GetThreadState() const

@@ -67,16 +67,13 @@ public:
     // all operations that read/write to shared state must call ControlPoint()
     //  before performing the read/write
     void Subscribe(size_t threadId);
-    // unsubscribe from scheduling
+    // unsubscribe calling thread from scheduling
+    // has no effect if thread is not subscribed
     void Unsubscribe();
     // give control to governor, only has effect after thread is subscribed
     void ControlPoint();
 
 public:
-    // hooks called on thread enter/exit
-    void HandleThreadInit();
-    void HandleThreadFinalize();
-
     static Governor* instance()
     {
         static Governor instance;
