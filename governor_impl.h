@@ -38,6 +38,11 @@ public:
 public:
     bool read(std::fstream& fs);
     bool write(std::fstream& fs);
+    // read/write using a char buffer
+    // buffer can be assumed to have at least one ending \0
+    size_t read(char* buffer);
+    // size describes buffer size
+    size_t write(char* buffer, size_t size);
 };
 
 struct ThreadState
@@ -95,6 +100,9 @@ private:
     // opens or refreshes file handles
     // if close = true, closes all handles
     void HandleOutFile(bool close);
+    // maps file to memory, sets it to specified size
+    // this updates _fileSize
+    void MapFileToMem(size_t size);
 
 private:
     // mutex that must be held when modifying shared data
@@ -103,7 +111,10 @@ private:
     RunMode _runMode = RUN_RANDOM;
     // file that stores sequence for scheduling
     // depending on run mode, this file is either read or written to
-    std::fstream _file;
+    int _fileDesc = -1;
+    char* _filePtr = nullptr;
+    size_t _fileSize = 0u;
+    size_t _fileIdx = 0u;
     // sequence used for scheduling, if not-empty
     std::vector<SchedPoint> _sched;
     size_t _schedIdx = 0;

@@ -1,15 +1,22 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cassert>
+#include <cstring>
 
 #include <vector>
 #include <algorithm>
 
+#include <sys/mman.h>
+#include <sys/types.h>
+#include <sys/stat.h>
+#include <fcntl.h>
 #include <unistd.h>
 
 #include "governor.h"
 #include "governor_hooks.h"
 #include "governor_impl.h"
+
+#define PAGE (1 << 12)
 
 #define GOV_ERR(str, ...) \
     fprintf(stderr, "%s:%d %s " str "\n", __FILE__, \
@@ -47,9 +54,52 @@ bool SchedPoint::write(std::fstream& fs)
     return true;
 }
 
+size_t SchedPoint::read(char* buffer)
+{
+    int nchars = 0; // number of chars read
+    int ret = std::sscanf(buffer, "%lu %lu %lu\n%n",
+        &threadId, &available, &higher, &nchars);
+
+    if (ret <= 0 || nchars <= 0)
+        return 0u;
+
+    return nchars;
+}
+
+size_t SchedPoint::write(char* buffer, size_t size)
+{
+    int ret = std::snprintf(buffer, size, "%lu %lu %lu\n",
+        threadId, available, higher);
+
+    if (ret <= 0)
+        return 0u;
+
+    return ret;
+}
+
 Governor::Governor()
 {
     std::unique_lock<std::mutex> lock(_mutex);
+
+    // open schedule file
+    _fileDesc = open(OUT_FILE, O_CREAT | O_RDWR, S_IRUSR | S_IWUSR | S_IRGRP | S_IROTH);
+
+    if (_fileDesc == -1)
+        GOV_ERR("failed to open or create %s", OUT_FILE);
+
+    // get size of file, in multiples of page
+    if (_fileDesc != -1)
+    {
+        struct stat st;
+        fstat(_fileDesc, &st);
+        _fileSize = (st.st_size / PAGE) * PAGE + ((st.st_size % PAGE) ? PAGE : 0);
+        // init file with at least 1 page of storage
+        if (_fileSize == 0)
+            _fileSize = PAGE;
+
+        // map file into memory
+        MapFileToMem(_fileSize);
+    }
 
     // initialize running thread
     // constructor "constructs an id that does not represent a thread"
@@ -82,6 +132,10 @@ Governor::~Governor()
 
     // close seq file
     HandleOutFile(true);
+
+    munmap(_filePtr, _fileSize);
+    _filePtr = nullptr;
+    close(_fileDesc);
 
     // free up allocated state memory
     for (auto p : _threads)
@@ -417,8 +471,22 @@ std::thread::id Governor::ChooseThread(RunMode mode)
     assert(itr != _threadIds.end());
     std::thread::id id = itr->second;
 
-    if (_file.is_open())
-        sp.write(_file);
+    if (_filePtr && (_runMode == RUN_RANDOM || _runMode == RUN_EXPLORE))
+    {
+        // write sp to file
+        while (true)
+        {
+            size_t len = sp.write(&_filePtr[_fileIdx], _fileSize - _fileIdx);
+            if (_fileIdx + len < _fileSize)
+            {
+                _fileIdx += len;
+                break;
+            }
+
+            // double size of file
+            MapFileToMem(_fileSize * 2);
+        }
+    }
 
     return id;
 }
@@ -461,10 +529,21 @@ void Governor::HandleOutFile(bool close)
 {
     if (close)
     {
-        if (_file.is_open())
+        if (_filePtr && (_runMode == RUN_RANDOM || _runMode == RUN_EXPLORE))
         {
-            _file << "END" << std::endl;
-            _file.close();
+            // write "END" to file
+            while (true)
+            {
+                size_t len = snprintf(&_filePtr[_fileIdx], _fileSize - _fileIdx, "END");
+                if (_fileIdx + len < _fileSize)
+                {
+                    _fileIdx += len;
+                    break;
+                }
+
+                // double size of file
+                MapFileToMem(_fileSize * 2);
+            }
         }
 
         return;
@@ -473,31 +552,65 @@ void Governor::HandleOutFile(bool close)
     // read last sequence, depending on mode
     if (_runMode == RUN_EXPLORE || _runMode == RUN_PRESET)
     {
-        // open file for reading
-        std::fstream fs(OUT_FILE, std::fstream::in);
-        if (fs.is_open())
-        {
-            // read sched
-            _sched.clear();
-            SchedPoint tmp;
-            while (tmp.read(fs))
-                _sched.push_back(tmp);
-
-            // then check if schedule reached end of program
-            std::string str;
-            fs >> str;
-            _schedDone = (str == "END");
-        }
-        else
+        if (_filePtr == nullptr)
         {
             if (_runMode == RUN_PRESET)
                 GOV_ERR("mode is RUN_PRESET but can't read %s file", OUT_FILE);
+        }
+        else
+        {
+            // read sched
+            _fileIdx = 0;
+            _sched.clear();
+            SchedPoint tmp;
+            size_t ret;
+            while ((ret = tmp.read(&_filePtr[_fileIdx])))
+            {
+                _sched.push_back(tmp);
+                _fileIdx += ret;
+            }
+
+            // then check if schedule reached end of program
+            int nchars;
+            std::sscanf(_filePtr, "END\n%n", &nchars);
+            _schedDone = (nchars > 0);
         }
     }
 
     // then prepare file for writing
     // don't need to write schedule when in RUN_PRESET
     // it is already present
-    if (_runMode == RUN_RANDOM || _runMode == RUN_EXPLORE)
-        _file.open(OUT_FILE, std::fstream::out | std::fstream::trunc);
+    if (_filePtr && (_runMode == RUN_RANDOM || _runMode == RUN_EXPLORE))
+    {
+        // reset file size
+        MapFileToMem(PAGE); // to a single page
+        // then clear its' contents
+        std::memset(_filePtr, 0x0, _fileSize);
+    }
+
+    // start writing from the beginning of the file
+    _fileIdx = 0;
+}
+
+void Governor::MapFileToMem(size_t size)
+{
+    if (_fileDesc == -1)
+        return; // no file
+
+    if (_filePtr)
+    {
+        munmap(_filePtr, _fileSize);
+        _filePtr = nullptr;
+    }
+
+    _fileSize = size;
+    // update file size
+    ftruncate(_fileDesc, _fileSize);
+
+    // re-map file into memory
+    _filePtr = (char*)mmap(nullptr, _fileSize, PROT_READ | PROT_WRITE, MAP_SHARED, _fileDesc, 0);
+    // mmap should not fail, fd is valid
+    assert(_filePtr && _filePtr != MAP_FAILED);
+    // string must be null-terminated
+    assert(_filePtr[_fileSize - 1] == '\0');
 }
