@@ -23,36 +23,7 @@
             __LINE__, __func__, ##__VA_ARGS__);
 
 // file where scheduling data is kept
-static const char* OUT_FILE = ".gov";
-
-bool SchedPoint::read(std::fstream& fs)
-{
-    std::streampos pos = fs.tellg();
-    size_t t, a, h;
-    if (!(fs >> t && fs >> a && fs >> h))
-    {
-        fs.clear(); // see: https://stackoverflow.com/questions/16364301/whats-wrong-with-the-ifstream-seekg
-        fs.seekg(pos); // restore pos before partially consuming input
-        return false;
-    }
-
-    threadId = t;
-    available = a;
-    higher = h;
-    return true;
-}
-
-bool SchedPoint::write(std::fstream& fs)
-{
-    if (!fs.is_open())
-        return false;
-
-    fs << threadId << ' '
-       << available << ' '
-       << higher << ' ';
-    fs << std::endl;
-    return true;
-}
+constexpr const char* GOV_FILE = ".gov";
 
 size_t SchedPoint::read(char* buffer)
 {
@@ -82,10 +53,13 @@ Governor::Governor()
     std::unique_lock<std::mutex> lock(_mutex);
 
     // open schedule file
-    _fileDesc = open(OUT_FILE, O_CREAT | O_RDWR, S_IRUSR | S_IWUSR | S_IRGRP | S_IROTH);
+    _fileDesc = open(GOV_FILE, O_CREAT | O_RDWR, S_IRUSR | S_IWUSR | S_IRGRP | S_IROTH);
 
     if (_fileDesc == -1)
-        GOV_ERR("failed to open or create %s", OUT_FILE);
+    {
+        GOV_ERR("failed to open or create %s", GOV_FILE);
+        std::abort();
+    }
 
     // get size of file, in multiples of page
     if (_fileDesc != -1)
@@ -118,7 +92,10 @@ Governor::Governor()
         else if (s == "RUN_PRESET")
             _runMode = RUN_PRESET;
         else
+        {
             GOV_ERR("invalid GOV_MODE variable %s", s.c_str());
+            std::abort();
+        }
     }
 
     lock.unlock();
@@ -154,8 +131,12 @@ bool Governor::Reset(bool force /*= false*/)
     if (!force && _schedIdx == 0)
         return true;
 
-    // close seq file
-    HandleOutFile(true);
+    if (_schedIdx > 0)
+    {
+        // close seq file
+        HandleOutFile(true);
+    }
+
     // then re-read and open
     HandleOutFile(false);
 
@@ -196,6 +177,7 @@ bool Governor::Reset(bool force /*= false*/)
             if (_sched.empty())
             {
                 GOV_ERR("RUN_EXPLORE - reached last state");
+                std::abort();
                 return false;
             }
 
@@ -230,12 +212,14 @@ void Governor::Subscribe(size_t threadId)
     if (GetThreadState())
     {
         GOV_ERR("thread %lu already subbed", threadId);
+        std::abort();
         return;
     }
     // check if thread is supposed to be able to sub
     if (_threadsToSub == 0)
     {
         GOV_ERR("no more threads were expected to sub");
+        std::abort();
         return;
     }
     // check if user provided an unused thread id
@@ -245,6 +229,7 @@ void Governor::Subscribe(size_t threadId)
         if (state->threadId == threadId)
         {
             GOV_ERR("threadId %lu provided is already used", threadId);
+            std::abort();
             return;
         }
     }
@@ -274,10 +259,7 @@ void Governor::Unsubscribe()
     std::unique_lock<std::mutex> lock(_mutex);
 
     if (GetThreadState() == nullptr)
-    {
-        // GOV_ERR("thread is not subbed, cannot unsub");
         return;
-    }
 
     // update affinity, after unsub thread can use all cpus
     //SetAffinity(false);
@@ -312,11 +294,11 @@ void Governor::ControlPoint()
     // and then (possibly) choose a new thread to execute
     UpdateActiveThread();
 
-    // wait until it's our turn to execute
-    std::thread::id id = std::this_thread::get_id();
     // release lock so other threads can check the running thread
     lock.unlock();
 
+    // wait until it's our turn to execute
+    std::thread::id id = std::this_thread::get_id();
     while (_activeThreadId.load() != id)
         std::this_thread::yield();
 }
@@ -431,8 +413,8 @@ std::thread::id Governor::ChooseThread(RunMode mode)
         size_t idx = _schedIdx++;
         if (idx >= _sched.size())
         {
-            GOV_ERR("mode is %d but no scheduling available at idx %lu",
-                mode, idx);
+            GOV_ERR("RUN_PRESET - no scheduling available at idx %lu", idx);
+            std::abort();
             return ChooseThread(RUN_RANDOM);
         }
 
@@ -443,6 +425,7 @@ std::thread::id Governor::ChooseThread(RunMode mode)
         {
             GOV_ERR("RUN_PRESET - threadId %lu is invalid at line %lu",
                 sp.threadId, idx + 1);
+            std::abort();
             return ChooseThread(RUN_RANDOM);
         }
 
@@ -450,6 +433,7 @@ std::thread::id Governor::ChooseThread(RunMode mode)
         {
             GOV_ERR("RUN_PRESET - wrong available value (%lu vs %lu) at "
                 "line %lu", sp.available, _threadIds.size(), idx + 1);
+            std::abort();
             return ChooseThread(RUN_RANDOM);
         }
 
@@ -463,6 +447,7 @@ std::thread::id Governor::ChooseThread(RunMode mode)
         {
             GOV_ERR("RUN_PRESET - wrong higher value (%lu vs %lu) at "
                 "line %lu", sp.higher, higher, idx + 1);
+            std::abort();
             return ChooseThread(RUN_RANDOM);
         }
     }
@@ -500,12 +485,11 @@ void Governor::SetAffinity(bool apply)
         assert(_cpuSet == nullptr);
 
         size_t numCPUs = sysconf(_SC_NPROCESSORS_ONLN);
-        //printf("numCPUs: %lu\n", numCPUs);
 
         _defaultCpuSet = CPU_ALLOC(numCPUs);
         _cpuSet = CPU_ALLOC(numCPUs);
         if (_defaultCpuSet == nullptr || _cpuSet == nullptr)
-            fprintf(stderr, "Governor::SetAffinity CPU_ALLOC failed\n");
+            GOV_ERR("CPU_ALLOC failed");
 
         size_t size = CPU_ALLOC_SIZE(numCPUs);
         CPU_ZERO_S(size, _cpuSet);
@@ -522,7 +506,7 @@ void Governor::SetAffinity(bool apply)
     cpu_set_t* setToUse = (apply ? _cpuSet : _defaultCpuSet);
     int ret = sched_setaffinity(0, sizeof(cpu_set_t), setToUse);
     if (ret == -1)
-        fprintf(stderr, "Governor::SetAffinity failed\n");
+        GOV_ERR("SetAffinity failed");
 }
 
 void Governor::HandleOutFile(bool close)
@@ -534,7 +518,7 @@ void Governor::HandleOutFile(bool close)
             // write "END" to file
             while (true)
             {
-                size_t len = snprintf(&_filePtr[_fileIdx], _fileSize - _fileIdx, "END");
+                size_t len = snprintf(&_filePtr[_fileIdx], _fileSize - _fileIdx, "END\n");
                 if (_fileIdx + len < _fileSize)
                 {
                     _fileIdx += len;
@@ -555,7 +539,10 @@ void Governor::HandleOutFile(bool close)
         if (_filePtr == nullptr)
         {
             if (_runMode == RUN_PRESET)
-                GOV_ERR("mode is RUN_PRESET but can't read %s file", OUT_FILE);
+            {
+                GOV_ERR("mode is RUN_PRESET but can't read %s file", GOV_FILE);
+                std::abort();
+            }
         }
         else
         {
@@ -571,8 +558,8 @@ void Governor::HandleOutFile(bool close)
             }
 
             // then check if schedule reached end of program
-            int nchars;
-            std::sscanf(_filePtr, "END\n%n", &nchars);
+            int nchars = 0;
+            std::sscanf(&_filePtr[_fileIdx], "END\n%n", &nchars);
             _schedDone = (nchars > 0);
         }
     }
@@ -611,6 +598,4 @@ void Governor::MapFileToMem(size_t size)
     _filePtr = (char*)mmap(nullptr, _fileSize, PROT_READ | PROT_WRITE, MAP_SHARED, _fileDesc, 0);
     // mmap should not fail, fd is valid
     assert(_filePtr && _filePtr != MAP_FAILED);
-    // string must be null-terminated
-    assert(_filePtr[_fileSize - 1] == '\0');
 }

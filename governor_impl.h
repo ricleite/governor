@@ -36,8 +36,6 @@ public:
     size_t higher; // number of threads with threadId higher than `threadId`
 
 public:
-    bool read(std::fstream& fs);
-    bool write(std::fstream& fs);
     // read/write using a char buffer
     // buffer can be assumed to have at least one ending \0
     size_t read(char* buffer);
@@ -97,6 +95,8 @@ private:
     // returns true if a new thread was chosen
     bool UpdateActiveThread();
     std::thread::id ChooseThread(RunMode mode);
+
+    // file fns
     // opens or refreshes file handles
     // if close = true, closes all handles
     void HandleOutFile(bool close);
