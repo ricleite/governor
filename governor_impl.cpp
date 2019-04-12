@@ -371,6 +371,7 @@ std::thread::id Governor::ChooseThread(RunMode mode)
         });
 
         _sched.push_back(sp);
+        _schedIdx = _sched.size() - 1;
     }
     else if (mode == RUN_EXPLORE)
     {
