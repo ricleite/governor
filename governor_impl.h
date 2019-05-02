@@ -108,7 +108,7 @@ private:
     // mutex that must be held when modifying shared data
     std::mutex _mutex;
     // scheduling mode used
-    RunMode _runMode = RUN_RANDOM;
+    RunMode _runMode = RUN_PRESET;
     // file that stores sequence for scheduling
     // depending on run mode, this file is either read or written to
     int _fileDesc = -1;
