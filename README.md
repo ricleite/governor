@@ -82,6 +82,10 @@ during runtime
 
 If unspecified, the run mode is `RUN_PRESET`.
 
+You can use abbreviations for the run modes. `RUN_RANDOM` can be used as
+`RANDOM` or just `RAND`, `RUN_EXPLORE` as `EXPLORE` or just `EXP`, and
+`RUN_PRESET` as `PRESET` or just `PRE`.
+
 ## Details
 
 Governor uses the observation that the outcome of a lock-free algorithm depends

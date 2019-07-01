@@ -40,7 +40,7 @@
             __LINE__, __func__, ##__VA_ARGS__);
 
 // file where scheduling data is kept
-constexpr const char* GOV_FILE = ".gov";
+constexpr const char* GOV_FILE = "gov.data";
 
 size_t SchedPoint::read(char* buffer)
 {
@@ -99,14 +99,22 @@ Governor::Governor()
     std::random_device r;
     _rng = std::minstd_rand(r());
 
+    // prepare run mode
     if (char* env = getenv("GOV_MODE"))
     {
         std::string s(env);
-        if (s == "RUN_RANDOM")
+
+        // https://stackoverflow.com/questions/1878001/how-do-i-check-if-a-c-stdstring-starts-with-a-certain-string-and-convert-a
+        // std::string::rfind(X) == 0 does the same as a "std::string::start_with"
+        auto starts_with = [s](const char* str) -> bool {
+            return s.rfind(str) == 0;
+        };
+
+        if (s == "RUN_RANDOM" || starts_with("RAND"))
             _runMode = RUN_RANDOM;
-        else if (s == "RUN_EXPLORE")
+        else if (s == "RUN_EXPLORE" || starts_with("EXP"))
             _runMode = RUN_EXPLORE;
-        else if (s == "RUN_PRESET")
+        else if (s == "RUN_PRESET" || starts_with("PRE"))
             _runMode = RUN_PRESET;
         else
         {
